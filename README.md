@@ -8,7 +8,7 @@ MetaBridge is a WhatsApp Cloud API inbox boundary. It turns webhook deliveries i
 sequenceDiagram
   participant Meta as Meta WhatsApp Cloud API
   participant API as MetaBridge API
-  participant Store as SQLite
+  participant Store as SQLite or Postgres
   participant Admin as Review console
   Meta->>API: POST /webhook + HMAC signature
   API->>API: validate payload + idempotency key
@@ -46,7 +46,7 @@ npm test
 
 ## Production hardening
 
-Use a queue between webhook acknowledgement and downstream processing, encrypt phone numbers at rest, verify Meta's app-secret proof, rotate `ADMIN_API_KEY`, add tenant filters, rate-limit operator actions, and publish outbound responses through a retryable outbox. The local SQLite adapter keeps the behavior deterministic for demos and tests.
+Use a queue between webhook acknowledgement and downstream processing, encrypt phone numbers at rest, verify Meta's app-secret proof, rotate `ADMIN_API_KEY`, add tenant filters, rate-limit operator actions, and publish outbound responses through a retryable outbox. When `DB_URL` or `SUPABASE_DB_URL` is set together with `POSTGRES_ROUTES_ENABLED=true`, the HTTP routes use an async `pg.Pool` repository and provision the `metabridge_messages`, `metabridge_conversations`, `metabridge_reviews`, and `metabridge_idempotency` tables. The local SQLite adapter remains deterministic for demos and tests.
 
 ## Security
 
@@ -54,4 +54,4 @@ Configure `META_APP_SECRET`, `META_VERIFY_TOKEN`, `ADMIN_API_KEY`, and `CORS_ORI
 
 ## Production adapters
 
-Set `DB_URL` or `SUPABASE_DB_URL` to select the managed Postgres connectivity check. Because the HTTP handlers still use the synchronous SQLite repository, production startup intentionally fails fast when these variables are present unless `POSTGRES_ROUTES_ENABLED=true`; the concrete remaining task is to migrate the route repository calls to an async Postgres implementation before enabling that flag. Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET` (or `STORAGE_BUCKET`) for signed uploads. The service-role key is server-only and must never be placed in the Expo client. Local tests omit these values and continue using the Node SQLite adapter.
+Set `DB_URL` or `SUPABASE_DB_URL` to select the managed Postgres connectivity check. The route repository is selected exclusively from these variables. If a Postgres URL is present without `POSTGRES_ROUTES_ENABLED=true`, startup fails fast instead of silently mixing persistence modes. `SUPABASE_DB_URL` uses the same async Postgres repository and the prefixed table names above. Set `STORAGE_PROVIDER=supabase` plus `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET` (or `STORAGE_BUCKET`) for signed uploads; leave it as `local` when only Postgres route persistence is needed. The service-role key is server-only and must never be placed in the Expo client. Local tests omit these values and continue using the Node SQLite adapter.
