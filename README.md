@@ -55,3 +55,7 @@ Configure `META_APP_SECRET`, `META_VERIFY_TOKEN`, `ADMIN_API_KEY`, and `CORS_ORI
 ## Production adapters
 
 Set `DB_URL` or `SUPABASE_DB_URL` together with `POSTGRES_ROUTES_ENABLED=true` to select the managed async Postgres repository. Apply `sql/postgres-schema.sql` before starting the service; startup validates connectivity and does not run production DDL. `SUPABASE_DB_URL` uses the same repository and prefixed table names above. Set `STORAGE_PROVIDER=supabase` plus `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET` (or `STORAGE_BUCKET`) for signed uploads; leave it as `local` when only Postgres route persistence is needed. The service-role key is server-only and must never be placed in the mobile client. Local tests omit these values and continue using the Node SQLite adapter.
+
+## Operations runbooks
+
+MetaBridge's production contracts are maintained as focused runbooks in [`docs/operations`](docs/operations/). The set covers signed Meta webhooks, provider retries, idempotency, routing/review, Postgres/RLS, rollout, and reconciliation.
