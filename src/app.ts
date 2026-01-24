@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { createMessageRepository } from "./repository.js";
 import { verifySignature } from "./signature.js";
+import { sendWhatsAppText } from "./whatsapp.js";
 
 export const repository = createMessageRepository();
 const adminKey = process.env.ADMIN_API_KEY ?? (process.env.NODE_ENV === "production" ? "" : "local-admin-key");
@@ -64,6 +65,38 @@ app.post("/inbox/:id/review", adminAuth, async (req, res) => {
   const updated = await repository.reviewMessage(String(req.params.id), parsed.data.reviewer, parsed.data.decision, parsed.data.note ?? null, new Date().toISOString());
   if (!updated) return res.status(404).json({ error: "message not found" });
   res.json({ id: String(req.params.id), status: parsed.data.decision === "approve" ? "approved" : "rejected" });
+});
+
+app.get("/metrics", adminAuth, async (_req, res) => res.json(await repository.metrics()));
+
+app.get("/outbound", adminAuth, async (req, res) => {
+  const status = typeof req.query.status === "string" ? req.query.status as any : undefined;
+  res.json(await repository.listOutbound(status));
+});
+
+app.post("/outbound", adminAuth, async (req, res) => {
+  const parsed = z.object({ to: z.string().regex(/^\+?[1-9]\d{7,14}$/), body: z.string().min(1).max(4096) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const now = new Date().toISOString();
+  const message = await repository.enqueueOutbound({ id: crypto.randomUUID(), toNumber: parsed.data.to, body: parsed.data.body, now });
+  res.status(202).json(message);
+});
+
+app.post("/outbound/process", adminAuth, async (_req, res) => {
+  const now = new Date();
+  const message = await repository.claimOutbound(now.toISOString());
+  if (!message) return res.status(204).send();
+  try {
+    const sent = await sendWhatsAppText(message.toNumber, message.body);
+    await repository.markOutboundSent(message.id, sent.providerMessageId, new Date().toISOString());
+    res.json({ id: message.id, status: "sent", providerMessageId: sent.providerMessageId });
+  } catch (error) {
+    const attempts = message.attempts;
+    const dead = attempts >= Number(process.env.META_MAX_DELIVERY_ATTEMPTS ?? 5);
+    const delay = Math.min(60 * 60_000, 2 ** Math.max(0, attempts - 1) * 10_000);
+    await repository.markOutboundFailure(message.id, error instanceof Error ? error.message : "delivery failed", new Date(Date.now() + delay).toISOString(), dead);
+    res.status(502).json({ id: message.id, status: dead ? "dead" : "retry", retryAt: new Date(Date.now() + delay).toISOString() });
+  }
 });
 
 export default app;
