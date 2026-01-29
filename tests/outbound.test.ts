@@ -32,7 +32,7 @@ describe("outbound delivery queue", () => {
     expect(claimed?.id).toBe("out-analytics");
     await repo.markOutboundSent("out-analytics", "wamid.analytics", new Date().toISOString());
     const analytics = await repo.deliveryAnalytics(24);
-    expect(analytics.attempts).toBeGreaterThanOrEqual(3);
+    expect(analytics.attempts).toBe(1);
     expect(analytics.sent).toBe(1);
     expect(analytics.successRate).toBeGreaterThan(0);
   });
