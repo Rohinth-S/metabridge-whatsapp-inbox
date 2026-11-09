@@ -14,4 +14,14 @@ describe("outbound delivery queue", () => {
     await repo.markOutboundFailure("out-1", "provider unavailable", new Date(0).toISOString(), false);
     expect((await repo.listOutbound("retry"))[0].attempts).toBe(1);
   });
+
+  it("records dead-letter state and exposes operator metrics", async () => {
+    const repo = createMessageRepository();
+    await repo.enqueueOutbound({ id: "out-dead", toNumber: "+919999999998", body: "Retry me", now: new Date(0).toISOString() });
+    expect(await repo.claimOutbound(new Date(1).toISOString())).toBeTruthy();
+    await repo.markOutboundFailure("out-dead", "permanent provider rejection", new Date(0).toISOString(), true);
+    expect((await repo.listOutbound("dead"))[0].lastError).toContain("permanent");
+    const metrics = await repo.metrics();
+    expect(metrics.outbound.dead).toBe(1);
+  });
 });
