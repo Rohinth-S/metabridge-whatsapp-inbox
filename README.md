@@ -46,7 +46,7 @@ npm test
 
 ## Production hardening
 
-Use a queue between webhook acknowledgement and downstream processing, encrypt phone numbers at rest, verify Meta's app-secret proof, rotate `ADMIN_API_KEY`, add tenant filters, rate-limit operator actions, and publish outbound responses through a retryable outbox. When `DB_URL` or `SUPABASE_DB_URL` is set together with `POSTGRES_ROUTES_ENABLED=true`, the HTTP routes use an async `pg.Pool` repository and provision the `metabridge_messages`, `metabridge_conversations`, `metabridge_reviews`, and `metabridge_idempotency` tables. The local SQLite adapter remains deterministic for demos and tests.
+Use a queue between webhook acknowledgement and downstream processing, encrypt phone numbers at rest, verify Meta's app-secret proof, rotate `ADMIN_API_KEY`, add tenant filters, rate-limit operator actions, and publish outbound responses through a retryable outbox. When `DB_URL` or `SUPABASE_DB_URL` is set together with `POSTGRES_ROUTES_ENABLED=true`, the HTTP routes use an async `pg.Pool` repository against the `metabridge_messages`, `metabridge_conversations`, `metabridge_reviews`, and `metabridge_idempotency` tables defined in `sql/postgres-schema.sql`. The local SQLite adapter remains deterministic for demos and tests.
 
 ## Security
 
