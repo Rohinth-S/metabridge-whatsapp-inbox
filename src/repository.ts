@@ -12,6 +12,18 @@ export type IncomingMessage = {
 };
 
 export type RepositoryMode = "sqlite" | "postgres";
+export type OutboundStatus = "queued" | "sending" | "sent" | "retry" | "dead";
+export type OutboundMessage = {
+  id: string;
+  toNumber: string;
+  body: string;
+  status: OutboundStatus;
+  attempts: number;
+  nextAttemptAt: string;
+  lastError: string | null;
+  providerMessageId: string | null;
+  createdAt: string;
+};
 
 export interface MessageRepository {
   readonly mode: RepositoryMode;
@@ -20,6 +32,12 @@ export interface MessageRepository {
   listMessages(status: string): Promise<any[]>;
   routeMessage(id: string, team: string, priority: string, now: string): Promise<boolean>;
   reviewMessage(id: string, reviewer: string, decision: "approve" | "reject", note: string | null, now: string): Promise<boolean>;
+  enqueueOutbound(input: { id: string; toNumber: string; body: string; now: string }): Promise<OutboundMessage>;
+  claimOutbound(now: string): Promise<OutboundMessage | undefined>;
+  markOutboundSent(id: string, providerMessageId: string, now: string): Promise<void>;
+  markOutboundFailure(id: string, error: string, nextAttemptAt: string, dead: boolean): Promise<void>;
+  listOutbound(status?: OutboundStatus): Promise<OutboundMessage[]>;
+  metrics(): Promise<{ inbound: Record<string, number>; outbound: Record<string, number> }>;
   close(): Promise<void>;
 }
 
@@ -95,6 +113,23 @@ class SqliteMessageRepository implements MessageRepository {
     });
   }
 
+  async enqueueOutbound(input: { id: string; toNumber: string; body: string; now: string }) {
+    db.prepare("INSERT INTO outbound_messages VALUES (?,?,?,?,?,?,?,?,?)").run(input.id, input.toNumber, input.body, "queued", 0, input.now, null, null, input.now);
+    return { id: input.id, toNumber: input.toNumber, body: input.body, status: "queued" as const, attempts: 0, nextAttemptAt: input.now, lastError: null, providerMessageId: null, createdAt: input.now };
+  }
+  async claimOutbound(now: string) {
+    return this.transaction(() => {
+      const row = db.prepare("SELECT * FROM outbound_messages WHERE status IN ('queued','retry') AND next_attempt_at<=? ORDER BY created_at LIMIT 1").get(now) as any;
+      if (!row) return undefined;
+      db.prepare("UPDATE outbound_messages SET status='sending',attempts=attempts+1 WHERE id=?").run(row.id);
+      return { id: row.id, toNumber: row.to_number, body: row.body, status: "sending" as const, attempts: row.attempts + 1, nextAttemptAt: row.next_attempt_at, lastError: row.last_error, providerMessageId: row.provider_message_id, createdAt: row.created_at };
+    });
+  }
+  async markOutboundSent(id: string, providerMessageId: string, now: string) { db.prepare("UPDATE outbound_messages SET status='sent',provider_message_id=?,last_error=NULL,next_attempt_at=? WHERE id=?").run(providerMessageId, now, id); }
+  async markOutboundFailure(id: string, error: string, nextAttemptAt: string, dead: boolean) { db.prepare("UPDATE outbound_messages SET status=?,last_error=?,next_attempt_at=? WHERE id=?").run(dead ? "dead" : "retry", error.slice(0, 1000), nextAttemptAt, id); }
+  async listOutbound(status?: OutboundStatus) { const rows = status ? db.prepare("SELECT * FROM outbound_messages WHERE status=? ORDER BY created_at DESC").all(status) : db.prepare("SELECT * FROM outbound_messages ORDER BY created_at DESC").all(); return (rows as any[]).map((row) => ({ id: row.id, toNumber: row.to_number, body: row.body, status: row.status, attempts: row.attempts, nextAttemptAt: row.next_attempt_at, lastError: row.last_error, providerMessageId: row.provider_message_id, createdAt: row.created_at })); }
+  async metrics() { const inboundRows = db.prepare("SELECT status,COUNT(*) count FROM messages GROUP BY status").all() as any[]; const outboundRows = db.prepare("SELECT status,COUNT(*) count FROM outbound_messages GROUP BY status").all() as any[]; return { inbound: Object.fromEntries(inboundRows.map((r) => [r.status, Number(r.count)])), outbound: Object.fromEntries(outboundRows.map((r) => [r.status, Number(r.count)])) }; }
+
   async close() {}
 }
 
@@ -113,6 +148,8 @@ CREATE TABLE IF NOT EXISTS metabridge_reviews (
 );
 CREATE TABLE IF NOT EXISTS metabridge_idempotency (key TEXT PRIMARY KEY, response_json JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL);
 CREATE INDEX IF NOT EXISTS metabridge_messages_status_received_idx ON metabridge_messages(status, received_at DESC);
+CREATE TABLE IF NOT EXISTS metabridge_outbound_messages (id TEXT PRIMARY KEY,to_number TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('queued','sending','sent','retry','dead')),attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL,last_error TEXT,provider_message_id TEXT,created_at TIMESTAMPTZ NOT NULL);
+CREATE INDEX IF NOT EXISTS metabridge_outbound_ready_idx ON metabridge_outbound_messages(status,next_attempt_at);
 `;
 
 class PostgresMessageRepository implements MessageRepository {
@@ -197,6 +234,14 @@ class PostgresMessageRepository implements MessageRepository {
       return true;
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
+
+  async enqueueOutbound(input: { id: string; toNumber: string; body: string; now: string }) { const result = await this.pool.query("INSERT INTO metabridge_outbound_messages (id,to_number,body,status,attempts,next_attempt_at,created_at) VALUES ($1,$2,$3,'queued',0,$4,$4) RETURNING *", [input.id, input.toNumber, input.body, input.now]); return this.toOutbound(result.rows[0]); }
+  async claimOutbound(now: string) { const client = await this.pool.connect(); try { await client.query("BEGIN"); const result = await client.query("SELECT * FROM metabridge_outbound_messages WHERE status IN ('queued','retry') AND next_attempt_at<=$1 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1", [now]); if (!result.rowCount) { await client.query("COMMIT"); return undefined; } const updated = await client.query("UPDATE metabridge_outbound_messages SET status='sending',attempts=attempts+1 WHERE id=$1 RETURNING *", [result.rows[0].id]); await client.query("COMMIT"); return this.toOutbound(updated.rows[0]); } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); } }
+  async markOutboundSent(id: string, providerMessageId: string, now: string) { await this.pool.query("UPDATE metabridge_outbound_messages SET status='sent',provider_message_id=$1,last_error=NULL,next_attempt_at=$2 WHERE id=$3", [providerMessageId, now, id]); }
+  async markOutboundFailure(id: string, error: string, nextAttemptAt: string, dead: boolean) { await this.pool.query("UPDATE metabridge_outbound_messages SET status=$1,last_error=$2,next_attempt_at=$3 WHERE id=$4", [dead ? "dead" : "retry", error.slice(0, 1000), nextAttemptAt, id]); }
+  async listOutbound(status?: OutboundStatus) { const result = status ? await this.pool.query("SELECT * FROM metabridge_outbound_messages WHERE status=$1 ORDER BY created_at DESC", [status]) : await this.pool.query("SELECT * FROM metabridge_outbound_messages ORDER BY created_at DESC"); return result.rows.map((row) => this.toOutbound(row)); }
+  async metrics() { const inbound = await this.pool.query("SELECT status,COUNT(*)::int count FROM metabridge_messages GROUP BY status"); const outbound = await this.pool.query("SELECT status,COUNT(*)::int count FROM metabridge_outbound_messages GROUP BY status"); return { inbound: Object.fromEntries(inbound.rows.map((r) => [r.status, r.count])), outbound: Object.fromEntries(outbound.rows.map((r) => [r.status, r.count])) }; }
+  private toOutbound(row: any): OutboundMessage { return { id: row.id, toNumber: row.to_number, body: row.body, status: row.status, attempts: Number(row.attempts), nextAttemptAt: row.next_attempt_at, lastError: row.last_error, providerMessageId: row.provider_message_id, createdAt: row.created_at }; }
 
   async close() { await this.pool.end(); }
 }
