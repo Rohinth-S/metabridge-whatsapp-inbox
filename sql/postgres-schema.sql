@@ -9,3 +9,7 @@ ALTER TABLE metabridge_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE metabridge_conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE metabridge_reviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE metabridge_idempotency ENABLE ROW LEVEL SECURITY;
+CREATE POLICY service_role_full_access ON metabridge_messages FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY service_role_full_access ON metabridge_conversations FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY service_role_full_access ON metabridge_reviews FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY service_role_full_access ON metabridge_idempotency FOR ALL TO service_role USING (true) WITH CHECK (true);
