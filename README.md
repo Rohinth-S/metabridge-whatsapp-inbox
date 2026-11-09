@@ -46,4 +46,8 @@ npm test
 
 ## Production hardening
 
-Use a queue between webhook acknowledgement and downstream processing, encrypt phone numbers at rest, verify Meta's app-secret proof, add operator authentication and tenancy filters, and publish outbound responses through a retryable outbox. The local SQLite adapter keeps the behavior deterministic for demos and tests.
+Use a queue between webhook acknowledgement and downstream processing, encrypt phone numbers at rest, verify Meta's app-secret proof, rotate `ADMIN_API_KEY`, add tenant filters, rate-limit operator actions, and publish outbound responses through a retryable outbox. The local SQLite adapter keeps the behavior deterministic for demos and tests.
+
+## Security
+
+Configure `META_APP_SECRET`, `META_VERIFY_TOKEN`, `ADMIN_API_KEY`, and `CORS_ORIGINS` in production. Webhook delivery is HMAC-checked in production; operator inbox endpoints require `X-Admin-Key` and are never anonymous.
