@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sendWhatsAppText } from "../src/whatsapp.js";
+import { sendWhatsAppText, sendWhatsAppTextWithFallback } from "../src/whatsapp.js";
 
 describe("WhatsApp Cloud API adapter", () => {
   it("sends a text payload and returns the provider id", async () => {
@@ -40,6 +40,30 @@ describe("WhatsApp Cloud API adapter", () => {
     } finally {
       delete process.env.META_ACCESS_TOKEN;
       delete process.env.META_PHONE_NUMBER_ID;
+    }
+  });
+
+  it("fails over to a secondary account when the primary provider is unavailable", async () => {
+    process.env.META_ACCESS_TOKEN = "primary-token";
+    process.env.META_PHONE_NUMBER_ID = "primary-phone";
+    process.env.META_FALLBACK_ACCESS_TOKEN = "fallback-token";
+    process.env.META_FALLBACK_PHONE_NUMBER_ID = "fallback-phone";
+    process.env.META_FALLBACK_GRAPH_BASE_URL = "https://fallback.test/v20.0";
+    const calls: string[] = [];
+    try {
+      const result = await sendWhatsAppTextWithFallback("+919999999999", "Hello", async (url) => {
+        calls.push(url);
+        if (url.includes("fallback.test")) return new Response(JSON.stringify({ messages: [{ id: "wamid.fallback" }] }), { status: 200 });
+        return new Response(JSON.stringify({ error: { message: "primary unavailable" } }), { status: 503 });
+      });
+      expect(result).toMatchObject({ providerMessageId: "wamid.fallback", provider: "fallback", attempts: 2 });
+      expect(calls).toHaveLength(2);
+    } finally {
+      delete process.env.META_ACCESS_TOKEN;
+      delete process.env.META_PHONE_NUMBER_ID;
+      delete process.env.META_FALLBACK_ACCESS_TOKEN;
+      delete process.env.META_FALLBACK_PHONE_NUMBER_ID;
+      delete process.env.META_FALLBACK_GRAPH_BASE_URL;
     }
   });
 });

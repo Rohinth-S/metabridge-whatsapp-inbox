@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { createMessageRepository } from "./repository.js";
 import { verifySignature } from "./signature.js";
-import { sendWhatsAppText } from "./whatsapp.js";
+import { sendWhatsAppTextWithFallback } from "./whatsapp.js";
 
 export const repository = createMessageRepository();
 const adminKey = process.env.ADMIN_API_KEY ?? (process.env.NODE_ENV === "production" ? "" : "local-admin-key");
@@ -68,6 +68,11 @@ app.post("/inbox/:id/review", adminAuth, async (req, res) => {
 });
 
 app.get("/metrics", adminAuth, async (_req, res) => res.json(await repository.metrics()));
+app.get("/outbound/analytics", adminAuth, async (req, res) => {
+  const parsed = z.coerce.number().int().min(1).max(24 * 30).optional().safeParse(req.query.windowHours);
+  if (!parsed.success) return res.status(400).json({ error: "windowHours must be an integer from 1 to 720" });
+  res.json(await repository.deliveryAnalytics(parsed.data ?? 24));
+});
 
 app.get("/outbound", adminAuth, async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status as any : undefined;
@@ -87,9 +92,9 @@ app.post("/outbound/process", adminAuth, async (_req, res) => {
   const message = await repository.claimOutbound(now.toISOString());
   if (!message) return res.status(204).send();
   try {
-    const sent = await sendWhatsAppText(message.toNumber, message.body);
+    const sent = await sendWhatsAppTextWithFallback(message.toNumber, message.body);
     await repository.markOutboundSent(message.id, sent.providerMessageId, new Date().toISOString());
-    res.json({ id: message.id, status: "sent", providerMessageId: sent.providerMessageId });
+    res.json({ id: message.id, status: "sent", providerMessageId: sent.providerMessageId, provider: sent.provider, attempts: sent.attempts });
   } catch (error) {
     const attempts = message.attempts;
     const dead = attempts >= Number(process.env.META_MAX_DELIVERY_ATTEMPTS ?? 5);
