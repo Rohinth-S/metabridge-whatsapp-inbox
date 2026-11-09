@@ -181,6 +181,8 @@ CREATE TABLE IF NOT EXISTS metabridge_idempotency (key TEXT PRIMARY KEY, respons
 CREATE INDEX IF NOT EXISTS metabridge_messages_status_received_idx ON metabridge_messages(status, received_at DESC);
 CREATE TABLE IF NOT EXISTS metabridge_outbound_messages (id TEXT PRIMARY KEY,to_number TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('queued','sending','sent','retry','dead')),attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL,last_error TEXT,provider_message_id TEXT,created_at TIMESTAMPTZ NOT NULL);
 CREATE INDEX IF NOT EXISTS metabridge_outbound_ready_idx ON metabridge_outbound_messages(status,next_attempt_at);
+CREATE TABLE IF NOT EXISTS metabridge_outbound_delivery_events (id TEXT PRIMARY KEY,message_id TEXT NOT NULL REFERENCES metabridge_outbound_messages(id),status TEXT NOT NULL,error TEXT,created_at TIMESTAMPTZ NOT NULL);
+CREATE INDEX IF NOT EXISTS metabridge_outbound_delivery_events_created_idx ON metabridge_outbound_delivery_events(created_at);
 `;
 
 class PostgresMessageRepository implements MessageRepository {
