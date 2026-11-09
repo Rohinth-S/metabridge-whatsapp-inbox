@@ -128,7 +128,8 @@ class PostgresMessageRepository implements MessageRepository {
   }
 
   async initialize() {
-    await this.pool.query(schema);
+    // The managed schema is applied by sql/postgres-schema.sql during provisioning.
+    // Keeping startup read/write-only prevents an application deploy from changing DDL.
   }
 
   async acceptWebhook(key: string, metabridge_messages: IncomingMessage[], now: string): Promise<{ accepted: number }> {
